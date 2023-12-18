@@ -1,6 +1,6 @@
 // Ultra Low Power API implementation (ulp.c)
 
-#include "stm32l4xx.h"
+#include "stm32h7xx.h"
 #include "FreeRTOS.h"
 #include "task.h"
 #include "ulp.h"
@@ -24,18 +24,7 @@ void vUlpInit()
       NVIC_SetPriority(SysTick_IRQn, configLIBRARY_LOWEST_INTERRUPT_PRIORITY);
    }
    #endif
-
-   //      Be sure the MCU wakes up from stop mode on the same clock we normally use as the core clock, if
-   // possible.  Might as well give the MCU a head start getting the clock going while waking from STOP.
-   //
-   if ( (RCC->CFGR & RCC_CFGR_SWS_Msk) == RCC_CFGR_SWS_HSI )
-   {
-      SET_BIT(RCC->CFGR, RCC_CFGR_STOPWUCK);
-   }
-   else if ( (RCC->CFGR & RCC_CFGR_SWS_Msk) == RCC_CFGR_SWS_MSI )
-   {
-      CLEAR_BIT(RCC->CFGR, RCC_CFGR_STOPWUCK);
-   }
+   // Removed as there is no MSI in H743
 }
 
 static volatile int xDeepSleepForbiddenFlags = 0;
@@ -81,12 +70,18 @@ void vUlpPreSleepProcessing()
    if (xDeepSleepForbiddenFlags == 0)
    {
       useDeepSleep = pdTRUE;
-      MODIFY_REG(PWR->CR1, PWR_CR1_LPMS_Msk, PWR_CR1_LPMS_STOP2);
+      // Drop SVOS voltage (also sets power-regulator in lowpower mode),
+      HAL_PWREx_ControlStopModeVoltageScaling(PWR_REGULATOR_SVOS_SCALE5);  /// 3 - 5 
+      CLEAR_BIT (PWR->CPUCR, (PWR_CPUCR_PDDS_D1 | PWR_CPUCR_PDDS_D3));
+      // TODO: D2 could get in standby (because USART3 is not operating)
+      CLEAR_BIT (PWR->CPUCR, PWR_CPUCR_PDDS_D2);
    }
    else if ((xDeepSleepForbiddenFlags & ~ulpPERIPHERALS_OK_IN_STOP1) == 0)
    {
       useDeepSleep = pdTRUE;
-      MODIFY_REG(PWR->CR1, PWR_CR1_LPMS_Msk, PWR_CR1_LPMS_STOP1);
+      MODIFY_REG (PWR->CR1, PWR_CR1_LPDS, PWR_MAINREGULATOR_ON);
+      CLEAR_BIT (PWR->CPUCR, (PWR_CPUCR_PDDS_D1 | PWR_CPUCR_PDDS_D3));
+      CLEAR_BIT (PWR->CPUCR, PWR_CPUCR_PDDS_D2);
    }
 
    if (useDeepSleep)

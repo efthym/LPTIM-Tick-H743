@@ -6,13 +6,12 @@
   ******************************************************************************
   * @attention
   *
-  * <h2><center>&copy; Copyright (c) 2021 STMicroelectronics.
-  * All rights reserved.</center></h2>
+  * Copyright (c) 2023 STMicroelectronics.
+  * All rights reserved.
   *
-  * This software component is licensed by ST under BSD 3-Clause license,
-  * the "License"; You may not use this file except in compliance with the
-  * License. You may obtain a copy of the License at:
-  *                        opensource.org/licenses/BSD-3-Clause
+  * This software is licensed under terms that can be found in the LICENSE file
+  * in the root directory of this software component.
+  * If no LICENSE file comes with this software, it is provided AS-IS.
   *
   ******************************************************************************
   */
@@ -28,6 +27,7 @@
 #include <string.h>
 #include "testTickTiming.h"
 #include "ulp.h"
+#include "timers.h"
 
 /* USER CODE END Includes */
 
@@ -49,15 +49,37 @@
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
-LPTIM_HandleTypeDef hlptim2;
+
+LPTIM_HandleTypeDef hlptim3;
 
 RTC_HandleTypeDef hrtc;
 
-UART_HandleTypeDef huart2;
+UART_HandleTypeDef huart3;
 
-osThreadId mainTaskHandle;
-osTimerId ledTimerHandle;
-osTimerId resultsTimerHandle;
+/* Definitions for mainTask */
+osThreadId_t mainTaskHandle;
+const osThreadAttr_t mainTask_attributes = {
+  .name = "mainTask",
+  .stack_size = 256 * 4,
+  .priority = (osPriority_t) osPriorityNormal,
+};
+/* Definitions for tickTest */
+osThreadId_t tickTestHandle;
+const osThreadAttr_t tickTest_attributes = {
+  .name = "tickTest",
+  .stack_size = 128 * 4,
+  .priority = (osPriority_t) osPriorityAboveNormal,
+};
+/* Definitions for ledTimer */
+osTimerId_t ledTimerHandle;
+const osTimerAttr_t ledTimer_attributes = {
+  .name = "ledTimer"
+};
+/* Definitions for resultsTimer */
+osTimerId_t resultsTimerHandle;
+const osTimerAttr_t resultsTimer_attributes = {
+  .name = "resultsTimer"
+};
 /* USER CODE BEGIN PV */
 
 /* USER CODE END PV */
@@ -65,14 +87,15 @@ osTimerId resultsTimerHandle;
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
-static void MX_USART2_UART_Init(void);
+static void MX_USART3_UART_Init(void);
 static void MX_RTC_Init(void);
-static void MX_LPTIM2_Init(void);
-void mainOsTask(void const * argument);
-void ledTimerCallback(void const * argument);
-void resultsTimerCallback(void const * argument);
+static void MX_LPTIM3_Init(void);
+void mainOsTask(void *argument);
+void ledTimerCallback(void *argument);
+void resultsTimerCallback(void *argument);
 
 /* USER CODE BEGIN PFP */
+extern void vTttOsTask(void *argument);
 
 /* USER CODE END PFP */
 
@@ -84,12 +107,12 @@ void resultsTimerCallback(void const * argument);
 #define MAX_DEMO_STATE     DEMO_STATE_TEST_3
 static void vSetDemoState( BaseType_t state )
 {
-   //      Assume for now that we're activating a demo state that doesn't need LPTIM2, our stress-test actor.
+   //      Assume for now that we're activating a demo state that doesn't need LPTIM3, our stress-test actor.
    //
-   if (LPTIM2->CR & LPTIM_CR_ENABLE)
+   if (LPTIM3->CR & LPTIM_CR_ENABLE)
    {
-      HAL_LPTIM_Counter_Stop_IT(&hlptim2);
-      vUlpOnPeripheralsInactive(ulpPERIPHERAL_LPTIM2);
+      HAL_LPTIM_Counter_Stop_IT(&hlptim3);
+      vUlpOnPeripheralsInactive(ulpPERIPHERAL_LPTIM3);
    }
 
    uint32_t ledIntervalMs = 0;
@@ -120,7 +143,7 @@ static void vSetDemoState( BaseType_t state )
    }
    else if (state == DEMO_STATE_TEST_3)
    {
-      //      In state 2, add an actor to stress the tick timing.  Use LPTIM2 interrupts since that timer
+      //      In state 2, add an actor to stress the tick timing.  Use LPTIM3 interrupts since that timer
       // keeps operating in STOP 1 mode, which allows us to keep demonstrating low-power operation.
       //
       //      Carefully select the interval of the nuisance interrupts to be slightly longer than the tick-
@@ -133,8 +156,8 @@ static void vSetDemoState( BaseType_t state )
       //
       //      Based on the discussion above, a good long soak test is strongly recommended here.
       //
-      vUlpOnPeripheralsActive(ulpPERIPHERAL_LPTIM2);
-      HAL_LPTIM_Counter_Start_IT(&hlptim2, (TICK_TEST_SAMPLING_INTERVAL_MS * LSE_VALUE) / 1000U);
+      vUlpOnPeripheralsActive(ulpPERIPHERAL_LPTIM3);
+      HAL_LPTIM_Counter_Start_IT(&hlptim3, (TICK_TEST_SAMPLING_INTERVAL_MS * LSE_VALUE) / 1000U);
 
       ledIntervalMs = 1000UL;
       vTttSetEvalInterval( pdMS_TO_TICKS(TICK_TEST_SAMPLING_INTERVAL_MS) );
@@ -158,7 +181,7 @@ static void vSetDemoState( BaseType_t state )
       len += sprintf(&banner[len], "  Jumps are shown as %% of %d ms.\r\n",
                      TICK_TEST_SAMPLING_INTERVAL_MS);
    }
-   HAL_UART_Transmit(&huart2, (uint8_t*)banner, len, HAL_MAX_DELAY);
+   HAL_UART_Transmit(&huart3, (uint8_t*)banner, len, HAL_MAX_DELAY);
 }
 
 static int lDescribeTickTestResults(TttResults_t* results, int periodNumber, char* dest)
@@ -206,17 +229,17 @@ static BaseType_t xUpdateResults( int xDemoState )
    //
    if (xDemoState == DEMO_STATE_TEST_3)
    {
-      vUlpOnPeripheralsActive(ulpPERIPHERAL_USART2);
-      HAL_UART_Transmit_IT(&huart2, (uint8_t*)textResults, resultsLen);
+      vUlpOnPeripheralsActive(ulpPERIPHERAL_USART3);
+      HAL_UART_Transmit_IT(&huart3, (uint8_t*)textResults, resultsLen);
    }
    else
    {
       //      Because busy-wait I/O keeps this task "ready", it also prevents tickless idle, so we don't need
       // to bother notifying the ULP driver that the UART peripheral is active.
       //
-      // vUlpOnPeripheralsActive(ulpPERIPHERAL_USART2);
-      HAL_UART_Transmit(&huart2, (uint8_t*)textResults, resultsLen, HAL_MAX_DELAY);
-      // vUlpOnPeripheralsInactive(ulpPERIPHERAL_USART2);
+      // vUlpOnPeripheralsActive(ulpPERIPHERAL_USART3);
+      HAL_UART_Transmit(&huart3, (uint8_t*)textResults, resultsLen, HAL_MAX_DELAY);
+      // vUlpOnPeripheralsInactive(ulpPERIPHERAL_USART3);
    }
 
    //      Apply some pass/fail criteria and report any failures.
@@ -232,7 +255,7 @@ static BaseType_t xUpdateResults( int xDemoState )
 
 void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
 {
-   vUlpOnPeripheralsInactiveFromISR(ulpPERIPHERAL_USART2);
+   vUlpOnPeripheralsInactiveFromISR(ulpPERIPHERAL_USART3);
 }
 
 void vBlipLed( uint32_t ms )
@@ -252,6 +275,13 @@ int main(void)
   /* USER CODE BEGIN 1 */
 
   /* USER CODE END 1 */
+/* Enable the CPU Cache */
+
+  /* Enable I-Cache---------------------------------------------------------*/
+  SCB_EnableICache();
+
+  /* Enable D-Cache---------------------------------------------------------*/
+  SCB_EnableDCache();
 
   /* MCU Configuration--------------------------------------------------------*/
 
@@ -271,54 +301,16 @@ int main(void)
 
   /* USER CODE BEGIN SysInit */
 
-  // Integrate lptimTick.c -- Start of Block
-  //
-  //      Code in lptimTick.c expects LSE or LSI to be configured and started by the application code.  This
-  // RCC code starts the LSE, but it is commented out because this demo application uses the RTC, so CubeMX
-  // already generates the code we need to start LSE.  See SystemClock_Config().
-  //
-  //  RCC_OscInitTypeDef RCC_OscInitStruct = {0};
-  //  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_LSE;
-  //  RCC_OscInitStruct.LSEState = RCC_LSE_ON;
-  //  RCC_OscInitStruct.PLL.PLLState = RCC_PLL_NONE;
-  //  if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
-  //  {
-  //    Error_Handler();
-  //  }
-  //
-  // Integrate lptimTick.c -- End of Block
-
   //      Initialize Ultra-Low Power support (ULP).
   //
   vUlpInit();
-
-  #if (configUSE_TICKLESS_IDLE != 2)
-  {
-    //      The tick-timing tests make more accurate evaluations of the tick timing when FreeRTOS has the best
-    // possible value in configCPU_CLOCK_HZ.  Since CubeMX defines that symbol as SystemCoreClock, we update
-    // SystemCoreClock here.  This code helped us "prove" that the MSI PLL behaves like a real PLL (albeit a
-    // very jittery one).  There's "no" tick drift as measured by the RTC when tickless idle is disabled and
-    // the MSI is in PLL mode driving the core clock.
-    //
-    //      We don't care if the HAL reverts this change at some point later during the application execution.
-    // We only want this updated value to endure long enough for FreeRTOS startup code to use it to calculate
-    // the tick timing.
-    //
-    if (RCC->CR & RCC_CR_MSIPLLEN)  // App Specific.  Assumes MSIPLLEN being set means MSI is the core clock.
-    {
-      int pllModeMultiplier = ( SystemCoreClock + (LSE_VALUE/2) ) / LSE_VALUE;
-      SystemCoreClock = LSE_VALUE * pllModeMultiplier;
-    }
-  }
-  #endif
-
   /* USER CODE END SysInit */
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
-  MX_USART2_UART_Init();
+  MX_USART3_UART_Init();
   MX_RTC_Init();
-  MX_LPTIM2_Init();
+  MX_LPTIM3_Init();
   /* USER CODE BEGIN 2 */
 
   //      If the user is currently holding the blue button down, clear DBGMCU->CR.  This step prevents the
@@ -327,12 +319,15 @@ int main(void)
   // will lose its connection as soon as we use a low-power mode, but we don't have any choice if we want to
   // see "true" current consumption.
   //
-  if ( HAL_GPIO_ReadPin(B1_GPIO_Port, B1_Pin) == GPIO_PIN_RESET )
+  if ( HAL_GPIO_ReadPin(B1_GPIO_Port, B1_Pin) == GPIO_PIN_SET )  // In H743Nucleo the blue button is pulled up
   {
      DBGMCU->CR = 0; // POR and BOR also clear this register, but not the reset pin, and not other resets.
   }
 
   /* USER CODE END 2 */
+
+  /* Init scheduler */
+  osKernelInitialize();
 
   /* USER CODE BEGIN RTOS_MUTEX */
   /* add mutexes, ... */
@@ -343,13 +338,11 @@ int main(void)
   /* USER CODE END RTOS_SEMAPHORES */
 
   /* Create the timer(s) */
-  /* definition and creation of ledTimer */
-  osTimerDef(ledTimer, ledTimerCallback);
-  ledTimerHandle = osTimerCreate(osTimer(ledTimer), osTimerPeriodic, NULL);
+  /* creation of ledTimer */
+  ledTimerHandle = osTimerNew(ledTimerCallback, osTimerPeriodic, NULL, &ledTimer_attributes);
 
-  /* definition and creation of resultsTimer */
-  osTimerDef(resultsTimer, resultsTimerCallback);
-  resultsTimerHandle = osTimerCreate(osTimer(resultsTimer), osTimerPeriodic, NULL);
+  /* creation of resultsTimer */
+  resultsTimerHandle = osTimerNew(resultsTimerCallback, osTimerPeriodic, NULL, &resultsTimer_attributes);
 
   /* USER CODE BEGIN RTOS_TIMERS */
   /* start timers, add new ones, ... */
@@ -360,16 +353,19 @@ int main(void)
   /* USER CODE END RTOS_QUEUES */
 
   /* Create the thread(s) */
-  /* definition and creation of mainTask */
-  osThreadDef(mainTask, mainOsTask, osPriorityNormal, 0, 256);
-  mainTaskHandle = osThreadCreate(osThread(mainTask), NULL);
+  /* creation of mainTask */
+  mainTaskHandle = osThreadNew(mainOsTask, NULL, &mainTask_attributes);
+
+  /* creation of tickTest */
+  tickTestHandle = osThreadNew(vTttOsTask, &hrtc, &tickTest_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
-
-  osThreadDef(tickTest, vTttOsTask, osPriorityAboveNormal, 0, configMINIMAL_STACK_SIZE);
-  osThreadCreate(osThread(tickTest), &hrtc);
-
+  /* add threads, ... */
   /* USER CODE END RTOS_THREADS */
+
+  /* USER CODE BEGIN RTOS_EVENTS */
+  /* add events, ... */
+  /* USER CODE END RTOS_EVENTS */
 
   /* Start scheduler */
   osKernelStart();
@@ -395,12 +391,15 @@ void SystemClock_Config(void)
   RCC_OscInitTypeDef RCC_OscInitStruct = {0};
   RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
 
+  /** Supply configuration update enable
+  */
+  HAL_PWREx_ConfigSupply(PWR_LDO_SUPPLY);
+
   /** Configure the main internal regulator output voltage
   */
-  if (HAL_PWREx_ControlVoltageScaling(PWR_REGULATOR_VOLTAGE_SCALE1) != HAL_OK)
-  {
-    Error_Handler();
-  }
+  __HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE3);
+
+  while(!__HAL_PWR_GET_FLAG(PWR_FLAG_VOSRDY)) {}
 
   /** Configure LSE Drive Capability
   */
@@ -410,14 +409,10 @@ void SystemClock_Config(void)
   /** Initializes the RCC Oscillators according to the specified parameters
   * in the RCC_OscInitTypeDef structure.
   */
-  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI|RCC_OSCILLATORTYPE_LSE
-                              |RCC_OSCILLATORTYPE_MSI;
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI|RCC_OSCILLATORTYPE_LSE;
   RCC_OscInitStruct.LSEState = RCC_LSE_ON;
-  RCC_OscInitStruct.HSIState = RCC_HSI_ON;
+  RCC_OscInitStruct.HSIState = RCC_HSI_DIV4;
   RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
-  RCC_OscInitStruct.MSIState = RCC_MSI_ON;
-  RCC_OscInitStruct.MSICalibrationValue = 0;
-  RCC_OscInitStruct.MSIClockRange = RCC_MSIRANGE_11;
   RCC_OscInitStruct.PLL.PLLState = RCC_PLL_NONE;
   if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
   {
@@ -427,53 +422,55 @@ void SystemClock_Config(void)
   /** Initializes the CPU, AHB and APB buses clocks
   */
   RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
-                              |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2;
-  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_MSI;
-  RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
-  RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV1;
-  RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;
+                              |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2
+                              |RCC_CLOCKTYPE_D3PCLK1|RCC_CLOCKTYPE_D1PCLK1;
+  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_HSI;
+  RCC_ClkInitStruct.SYSCLKDivider = RCC_SYSCLK_DIV1;
+  RCC_ClkInitStruct.AHBCLKDivider = RCC_HCLK_DIV1;
+  RCC_ClkInitStruct.APB3CLKDivider = RCC_APB3_DIV1;
+  RCC_ClkInitStruct.APB1CLKDivider = RCC_APB1_DIV2;
+  RCC_ClkInitStruct.APB2CLKDivider = RCC_APB2_DIV1;
+  RCC_ClkInitStruct.APB4CLKDivider = RCC_APB4_DIV2;
 
-  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_2) != HAL_OK)
+  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_0) != HAL_OK)
   {
     Error_Handler();
   }
-
-  /** Enable MSI Auto calibration
-  */
-  HAL_RCCEx_EnableMSIPLLMode();
 }
 
 /**
-  * @brief LPTIM2 Initialization Function
+  * @brief LPTIM3 Initialization Function
   * @param None
   * @retval None
   */
-static void MX_LPTIM2_Init(void)
+static void MX_LPTIM3_Init(void)
 {
 
-  /* USER CODE BEGIN LPTIM2_Init 0 */
+  /* USER CODE BEGIN LPTIM3_Init 0 */
 
-  /* USER CODE END LPTIM2_Init 0 */
+  /* USER CODE END LPTIM3_Init 0 */
 
-  /* USER CODE BEGIN LPTIM2_Init 1 */
+  /* USER CODE BEGIN LPTIM3_Init 1 */
 
-  /* USER CODE END LPTIM2_Init 1 */
-  hlptim2.Instance = LPTIM2;
-  hlptim2.Init.Clock.Source = LPTIM_CLOCKSOURCE_APBCLOCK_LPOSC;
-  hlptim2.Init.Clock.Prescaler = LPTIM_PRESCALER_DIV1;
-  hlptim2.Init.Trigger.Source = LPTIM_TRIGSOURCE_SOFTWARE;
-  hlptim2.Init.OutputPolarity = LPTIM_OUTPUTPOLARITY_HIGH;
-  hlptim2.Init.UpdateMode = LPTIM_UPDATE_IMMEDIATE;
-  hlptim2.Init.CounterSource = LPTIM_COUNTERSOURCE_INTERNAL;
-  hlptim2.Init.Input1Source = LPTIM_INPUT1SOURCE_GPIO;
-  hlptim2.Init.Input2Source = LPTIM_INPUT2SOURCE_GPIO;
-  if (HAL_LPTIM_Init(&hlptim2) != HAL_OK)
+  /* USER CODE END LPTIM3_Init 1 */
+  hlptim3.Instance = LPTIM3;
+  hlptim3.Init.Clock.Source = LPTIM_CLOCKSOURCE_APBCLOCK_LPOSC;
+  hlptim3.Init.Clock.Prescaler = LPTIM_PRESCALER_DIV1;
+  hlptim3.Init.Trigger.Source = LPTIM_TRIGSOURCE_SOFTWARE;
+  hlptim3.Init.OutputPolarity = LPTIM_OUTPUTPOLARITY_HIGH;
+  hlptim3.Init.UpdateMode = LPTIM_UPDATE_IMMEDIATE;
+  hlptim3.Init.CounterSource = LPTIM_COUNTERSOURCE_INTERNAL;
+  hlptim3.Init.Input1Source = LPTIM_INPUT1SOURCE_GPIO;
+  if (HAL_LPTIM_Init(&hlptim3) != HAL_OK)
   {
     Error_Handler();
   }
-  /* USER CODE BEGIN LPTIM2_Init 2 */
-
-  /* USER CODE END LPTIM2_Init 2 */
+  /* USER CODE BEGIN LPTIM3_Init 2 */
+  // This is required for LPTIM3 to work in stop mode.
+  __HAL_RCC_LPTIM3_CLKAM_ENABLE();
+  // The same for sleep mode.
+  __HAL_RCC_LPTIM3_CLK_SLEEP_ENABLE();
+  /* USER CODE END LPTIM3_Init 2 */
 
 }
 
@@ -500,9 +497,9 @@ static void MX_RTC_Init(void)
   hrtc.Init.AsynchPrediv = 3;
   hrtc.Init.SynchPrediv = 8191;
   hrtc.Init.OutPut = RTC_OUTPUT_DISABLE;
-  hrtc.Init.OutPutRemap = RTC_OUTPUT_REMAP_NONE;
   hrtc.Init.OutPutPolarity = RTC_OUTPUT_POLARITY_HIGH;
   hrtc.Init.OutPutType = RTC_OUTPUT_TYPE_OPENDRAIN;
+  hrtc.Init.OutPutRemap = RTC_OUTPUT_REMAP_NONE;
   if (HAL_RTC_Init(&hrtc) != HAL_OK)
   {
     Error_Handler();
@@ -514,37 +511,50 @@ static void MX_RTC_Init(void)
 }
 
 /**
-  * @brief USART2 Initialization Function
+  * @brief USART3 Initialization Function
   * @param None
   * @retval None
   */
-static void MX_USART2_UART_Init(void)
+static void MX_USART3_UART_Init(void)
 {
 
-  /* USER CODE BEGIN USART2_Init 0 */
+  /* USER CODE BEGIN USART3_Init 0 */
 
-  /* USER CODE END USART2_Init 0 */
+  /* USER CODE END USART3_Init 0 */
 
-  /* USER CODE BEGIN USART2_Init 1 */
+  /* USER CODE BEGIN USART3_Init 1 */
 
-  /* USER CODE END USART2_Init 1 */
-  huart2.Instance = USART2;
-  huart2.Init.BaudRate = 115200;
-  huart2.Init.WordLength = UART_WORDLENGTH_8B;
-  huart2.Init.StopBits = UART_STOPBITS_1;
-  huart2.Init.Parity = UART_PARITY_NONE;
-  huart2.Init.Mode = UART_MODE_TX_RX;
-  huart2.Init.HwFlowCtl = UART_HWCONTROL_NONE;
-  huart2.Init.OverSampling = UART_OVERSAMPLING_16;
-  huart2.Init.OneBitSampling = UART_ONE_BIT_SAMPLE_DISABLE;
-  huart2.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
-  if (HAL_UART_Init(&huart2) != HAL_OK)
+  /* USER CODE END USART3_Init 1 */
+  huart3.Instance = USART3;
+  huart3.Init.BaudRate = 115200;
+  huart3.Init.WordLength = UART_WORDLENGTH_8B;
+  huart3.Init.StopBits = UART_STOPBITS_1;
+  huart3.Init.Parity = UART_PARITY_NONE;
+  huart3.Init.Mode = UART_MODE_TX_RX;
+  huart3.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+  huart3.Init.OverSampling = UART_OVERSAMPLING_16;
+  huart3.Init.OneBitSampling = UART_ONE_BIT_SAMPLE_DISABLE;
+  huart3.Init.ClockPrescaler = UART_PRESCALER_DIV1;
+  huart3.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
+  if (HAL_UART_Init(&huart3) != HAL_OK)
   {
     Error_Handler();
   }
-  /* USER CODE BEGIN USART2_Init 2 */
+  if (HAL_UARTEx_SetTxFifoThreshold(&huart3, UART_TXFIFO_THRESHOLD_1_8) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  if (HAL_UARTEx_SetRxFifoThreshold(&huart3, UART_RXFIFO_THRESHOLD_1_8) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  if (HAL_UARTEx_DisableFifoMode(&huart3) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN USART3_Init 2 */
 
-  /* USER CODE END USART2_Init 2 */
+  /* USER CODE END USART3_Init 2 */
 
 }
 
@@ -564,15 +574,84 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOH_CLK_ENABLE();
   __HAL_RCC_GPIOA_CLK_ENABLE();
   __HAL_RCC_GPIOB_CLK_ENABLE();
+  __HAL_RCC_GPIOD_CLK_ENABLE();
+  __HAL_RCC_GPIOG_CLK_ENABLE();
+  __HAL_RCC_GPIOE_CLK_ENABLE();
+
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPIOB, LD1_Pin|LD3_Pin, GPIO_PIN_RESET);
+
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(USB_OTG_FS_PWR_EN_GPIO_Port, USB_OTG_FS_PWR_EN_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin : B1_Pin */
   GPIO_InitStruct.Pin = B1_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_IT_FALLING;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(B1_GPIO_Port, &GPIO_InitStruct);
+
+  /*Configure GPIO pins : PC1 PC4 PC5 */
+  GPIO_InitStruct.Pin = GPIO_PIN_1|GPIO_PIN_4|GPIO_PIN_5;
+  GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  GPIO_InitStruct.Alternate = GPIO_AF11_ETH;
+  HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+
+  /*Configure GPIO pins : PA1 PA2 PA7 */
+  GPIO_InitStruct.Pin = GPIO_PIN_1|GPIO_PIN_2|GPIO_PIN_7;
+  GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  GPIO_InitStruct.Alternate = GPIO_AF11_ETH;
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+  /*Configure GPIO pins : LD1_Pin LD3_Pin */
+  GPIO_InitStruct.Pin = LD1_Pin|LD3_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : PB13 */
+  GPIO_InitStruct.Pin = GPIO_PIN_13;
+  GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  GPIO_InitStruct.Alternate = GPIO_AF11_ETH;
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : USB_OTG_FS_PWR_EN_Pin */
+  GPIO_InitStruct.Pin = USB_OTG_FS_PWR_EN_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(USB_OTG_FS_PWR_EN_GPIO_Port, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : USB_OTG_FS_OVCR_Pin */
+  GPIO_InitStruct.Pin = USB_OTG_FS_OVCR_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(USB_OTG_FS_OVCR_GPIO_Port, &GPIO_InitStruct);
+
+  /*Configure GPIO pins : PA8 PA11 PA12 */
+  GPIO_InitStruct.Pin = GPIO_PIN_8|GPIO_PIN_11|GPIO_PIN_12;
+  GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  GPIO_InitStruct.Alternate = GPIO_AF10_OTG1_FS;
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+  /*Configure GPIO pins : PG11 PG13 */
+  GPIO_InitStruct.Pin = GPIO_PIN_11|GPIO_PIN_13;
+  GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  GPIO_InitStruct.Alternate = GPIO_AF11_ETH;
+  HAL_GPIO_Init(GPIOG, &GPIO_InitStruct);
 
   /*Configure GPIO pin : LD2_Pin */
   GPIO_InitStruct.Pin = LD2_Pin;
@@ -608,8 +687,8 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 
 void HAL_LPTIM_AutoReloadMatchCallback(LPTIM_HandleTypeDef *hlptim)
 {
-   //      The HAL calls this function when LPTIM2 has an ARR match event.  We use LPTIM2 as a stress-test
-   // actor during test state 2.  This function has nothing to do with lptimTick.c or LPTIM1, but it does
+   //      The HAL calls this function when LPTIM3 has an ARR match event.  We use LPTIM3 as a stress-test
+   // actor during test state 2.  This function has nothing to do with lptimTick.c or LPTIM3, but it does
    // help us *test* the tick timing provided by that code and that timer.
 
    //      Wake the main task, but for no reason.  We're just trying to stress test the tick timing.
@@ -628,7 +707,7 @@ void HAL_LPTIM_AutoReloadMatchCallback(LPTIM_HandleTypeDef *hlptim)
   * @retval None
   */
 /* USER CODE END Header_mainOsTask */
-void mainOsTask(void const * argument)
+void mainOsTask(void *argument)
 {
   /* USER CODE BEGIN 5 */
 
@@ -638,15 +717,15 @@ void mainOsTask(void const * argument)
    // required by the HAL even after FreeRTOS has control.  It's still best to stop the timer here, and then
    // define HAL_GetTick() and HAL_Delay() to use the FreeRTOS tick (and delay) once available.
    //
-   //      We don't call HAL_SuspendTick() here because that function leaves TIM17 enabled and running for no
+   //      We don't call HAL_SuspendTick() here because that function leaves TIM6 enabled and running for no
    // reason.
    //
-   TIM17->CR1 &= ~TIM_CR1_CEN;  // wish CubeMX would generate a symbol for the HAL tick timer
+   TIM6->CR1 &= ~TIM_CR1_CEN;  // wish CubeMX would generate a symbol for the HAL tick timer
 
-   //      Be sure LPTIM2 ignores its input clock when the debugger stops program execution.
+   //      Be sure LPTIM3 ignores its input clock when the debugger stops program execution.
    //
    taskDISABLE_INTERRUPTS();
-   DBGMCU->APB1FZR2 |= DBGMCU_APB1FZR2_DBG_LPTIM2_STOP;
+   __HAL_DBGMCU_FREEZE_LPTIM3();
    taskENABLE_INTERRUPTS();
 
    //      Start the demo on test 1.
@@ -703,7 +782,7 @@ void mainOsTask(void const * argument)
 }
 
 /* ledTimerCallback function */
-void ledTimerCallback(void const * argument)
+void ledTimerCallback(void *argument)
 {
   /* USER CODE BEGIN ledTimerCallback */
    UNUSED(argument);
@@ -717,7 +796,7 @@ void ledTimerCallback(void const * argument)
 }
 
 /* resultsTimerCallback function */
-void resultsTimerCallback(void const * argument)
+void resultsTimerCallback(void *argument)
 {
   /* USER CODE BEGIN resultsTimerCallback */
    UNUSED(argument);
@@ -732,7 +811,7 @@ void resultsTimerCallback(void const * argument)
 
 /**
   * @brief  Period elapsed callback in non blocking mode
-  * @note   This function is called  when TIM17 interrupt took place, inside
+  * @note   This function is called  when TIM6 interrupt took place, inside
   * HAL_TIM_IRQHandler(). It makes a direct call to HAL_IncTick() to increment
   * a global variable "uwTick" used as application time base.
   * @param  htim : TIM handle
@@ -743,7 +822,7 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
   /* USER CODE BEGIN Callback 0 */
 
   /* USER CODE END Callback 0 */
-  if (htim->Instance == TIM17) {
+  if (htim->Instance == TIM6) {
     HAL_IncTick();
   }
   /* USER CODE BEGIN Callback 1 */

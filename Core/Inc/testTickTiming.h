@@ -17,7 +17,7 @@
 //
 #define tttTEST_DURATION_SECONDS 60 // MAX 3600
 
-void vTttOsTask( void const * argument );
+void vTttOsTask( void * argument );
 
 void vApplicationTickHook( void );
 

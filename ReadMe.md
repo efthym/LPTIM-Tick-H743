@@ -1,4 +1,16 @@
-# LPTIM-Tick
+# LPTIM-Tick-H743
+
+I am using platform IO for development, so the directory structure is somewhat modified: I removed the Drivers directory (platform IO downloads these in its own filespace) and the Core/Startup directory (the startup file is again in platform IO filespace).
+CMSIS_OS V2 is used instead of V1 of the original.
+
+I use LPTIM2 for the FreeRTOS tick counter (in place of LPTIM1 in the original).
+The system is clocked at 16MHz from the 64MHz HSI prescaled by 4.
+LPTIM2 is clocked by the 32.768kHz LSE.
+
+For the timing test, I use LPTIM3 (in place of LPTIM2 in the original) clocked by LSE and USART3 which connects to STlink (Virtual COM).
+
+TODO: measure the current on the board.
+
 *FreeRTOS Tick/Tickless via LPTIM*
 
 Use LPTIM for the FreeRTOS tick instead of the SysTick Timer for ultra-low-power applications.

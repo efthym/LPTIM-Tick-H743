@@ -29,7 +29,7 @@
 
 #include "FreeRTOS.h"
 #include "task.h"
-#include "stm32l4xx.h"
+#include "stm32h7xx.h"
 
 //      This FreeRTOS port "extension" for STM32 uses LPTIM to generate the OS tick instead of the systick
 // timer.  The benefit of the LPTIM is that it continues running in "stop" mode as long as its clock source
@@ -148,7 +148,8 @@
 // the system tick.
 //
 #ifndef configTICK_INTERRUPT_PRIORITY
-#define configTICK_INTERRUPT_PRIORITY configLIBRARY_LOWEST_INTERRUPT_PRIORITY // default only; see above
+#define configTICK_INTERRUPT_PRIORITY configLIBRARY_LOWEST_INTERRUPT_PRIORITY
+// default only; see above
 #endif
 
 //      Symbol configTICK_USES_LSI, optionally defined in FreeRTOSConfig.h, is defined only when LPTIM should
@@ -159,7 +160,7 @@
    #define LPTIMSEL_Val 1 // LSI
    #define IS_REF_CLOCK_READY() (RCC->CSR & RCC_CSR_LSIRDY)
 #else
-   #define LPTIMSEL_Val 3 // LSE
+   #define LPTIMSEL_Val RCC_LPTIM2CLKSOURCE_LSE // LSE
    #define IS_REF_CLOCK_READY() (RCC->BDCR & RCC_BDCR_LSERDY)
 #endif
 
@@ -250,9 +251,9 @@ static volatile uint8_t isTickNowSuppressed;    //   This field helps the tick I
 // you must change the first five statements of vPortSetupTimerInterrupt() to match your STM32.
 //
 #ifndef LPTIM
-#define LPTIM              LPTIM1
-#define LPTIM_IRQn         LPTIM1_IRQn
-#define LPTIM_IRQHandler   LPTIM1_IRQHandler
+#define LPTIM              LPTIM2
+#define LPTIM_IRQn         LPTIM2_IRQn
+#define LPTIM_IRQHandler   LPTIM2_IRQHandler
 #endif
 
 //============================================================================================================
@@ -270,23 +271,15 @@ void vPortSetupTimerInterrupt( void )
    //      Modify these statements as needed for your STM32.  See LPTIM Instance Selection (above) for
    // additional information.
    //
-   RCC->APB1ENR1 |= RCC_APB1ENR1_LPTIM1EN;
-   MODIFY_REG(RCC->CCIPR, RCC_CCIPR_LPTIM1SEL, LPTIMSEL_Val << RCC_CCIPR_LPTIM1SEL_Pos);
-   DBGMCU->APB1FZR1 |= DBGMCU_APB1FZR1_DBG_LPTIM1_STOP;
-   RCC->APB1RSTR1 |= RCC_APB1RSTR1_LPTIM1RST;   // Reset the LPTIM module per erratum 2.14.1.
-   RCC->APB1RSTR1 &= ~RCC_APB1RSTR1_LPTIM1RST;
-   #ifdef STM32WL   // <-- "Family" symbol is defined in the ST device header file, e.g., "stm32wlxx.h".
-   {
-      #define EXTI_IMR1_LPTIM1   (1UL << 29)
-      #define EXTI_IMR1_LPTIM2   (1UL << 30)
-      #define EXTI_IMR1_LPTIM3   (1UL << 31)
-
-      //      Users of STM32WL must also change this next statement to match their LPTIM instance selection.
-      // By default these MCU's disable wake-up from deep sleep via LPTIM.  An oversight by ST?
-      //
-      EXTI->IMR1 |= EXTI_IMR1_LPTIM1;
-   }
-   #endif
+   __HAL_RCC_LPTIM2_CLK_ENABLE();
+   __HAL_RCC_LPTIM2_CONFIG(LPTIMSEL_Val);
+   __HAL_DBGMCU_FREEZE_LPTIM2();
+   __HAL_RCC_LPTIM2_FORCE_RESET();
+   __HAL_RCC_LPTIM2_RELEASE_RESET();
+   // This is required for LPTIM2 to work in stop mode.
+   __HAL_RCC_LPTIM2_CLKAM_ENABLE();
+   // Do it for sleep mode too, just in case
+   __HAL_RCC_LPTIM2_CLK_SLEEP_ENABLE();
 
    //      Be sure the reference clock is ready.  If this assertion fails, be sure your application code
    // starts the reference clock (LSE or LSI) prior to starting FreeRTOS.

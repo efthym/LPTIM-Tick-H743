@@ -1,0 +1,11 @@
+{
+    "name": "FreeRTOS",
+    "description":"cube_freeRTOS_Library",
+    "build": {
+             "flags": [
+                     "-I include",
+                     "-I CMSIS_RTOS_V2",
+                     "-I portable/GCC/ARM_CM4F"
+             ]
+    }
+}

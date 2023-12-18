@@ -1,4 +1,4 @@
-// Test FreeRTOS Tick Timing on STM32L4 (testTickTiming.c)
+// Test FreeRTOS Tick Timing on STM32H7 (testTickTiming.c)
 //
 // o Generates a new TttResults_t every tttTEST_DURATION_SECONDS unless disabled.
 // o Disable with vTttSetEvalInterval( portMAX_DELAY );
@@ -8,7 +8,7 @@
 #include "testTickTiming.h"
 #include "FreeRTOS.h"
 #include "task.h"
-#include "stm32l4xx_hal.h"
+#include "stm32h7xx_hal.h"
 
 TttResults_t prevResults;
 
@@ -76,7 +76,7 @@ void vApplicationTickHook( void )
    } while (tickHookSnapshot.SSR != RTC->SSR);
 }
 
-void vTttOsTask( void const * argument )
+void vTttOsTask( void * argument )
 {
    //      Save a copy of our task handle so our API functions can use task notifications easily.
    //
@@ -96,7 +96,7 @@ void vTttOsTask( void const * argument )
    //      Be sure the RTC ignores its input clock when the debugger stops program execution.
    //
    taskDISABLE_INTERRUPTS();
-   DBGMCU->APB1FZR1 |= DBGMCU_APB1FZR1_DBG_RTC_STOP;
+   __HAL_DBGMCU_FREEZE_RTC();
    taskENABLE_INTERRUPTS();
 
    //      Coming out of stop mode, the RTC shadow registers aren't up-to-date.  So when we read the RTC,

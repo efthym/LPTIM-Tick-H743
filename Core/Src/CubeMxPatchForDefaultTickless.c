@@ -9,9 +9,11 @@
 //
 // So this function fixes the problem.  Ideally CubeMX will fix the issue and we can delete this file.
 
+#if ( configUSE_TICKLESS_IDLE == 1 )
+
 #include "FreeRTOS.h"
 #include "task.h" // for configASSERT(), which uses taskDISABLE_INTERRUPTS()
-#include "stm32l4xx.h"
+#include "stm32h7xx.h"
 
 // Bug fix only.  Applies only to configUSE_TICKLESS_IDLE == 1.  See above.
 void PreSleepProcessing(uint32_t ulExpectedIdleTime)
@@ -25,3 +27,4 @@ void PreSleepProcessing(uint32_t ulExpectedIdleTime)
    __WFI();
    __ISB();
 }
+#endif
